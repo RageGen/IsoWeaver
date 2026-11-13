@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=IsoWeaver
+GenericName=ISO Image Editor
+Comment=Browse, extract, and edit ISO images
+Exec=isoweaver
+Icon=org.isoweaver.IsoWeaver
+Terminal=false
+StartupNotify=true
+Categories=Utility;Archiving;
+Keywords=ISO;disc;disk image;archive;

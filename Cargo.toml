@@ -1,0 +1,16 @@
+[package]
+name = "isoweaver"
+default-run = "isoweaver"
+version = "0.1.0"
+edition = "2021"
+description = "A native GTK application for browsing, extracting, and editing ISO images"
+license = "GPL-3.0-or-later"
+readme = "README.md"
+keywords = ["iso", "disk-image", "gtk", "linux"]
+categories = ["filesystem", "os::linux-apis"]
+
+[dependencies]
+gtk = { package = "gtk4", version = "0.9.7" }
+gio = "0.20.12"
+glib = "0.20.12"
+gdk-pixbuf = "0.20"
