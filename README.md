@@ -40,7 +40,7 @@ Changes remain staged until saved. The source stays untouched. Boot checks verif
 
 ## Portable packaging
 
-The local [AppImage build script](packaging/linux/build-appimage.sh) bundles the application and runtime tools. See [Build instructions](BUILD.md). This checkout does not include a GitHub Actions workflow or a published download.
+The local [AppImage build script](packaging/linux/build-appimage.sh) bundles the application, GTK libraries, 7-Zip, and xorriso into `dist/IsoWeaver-x86_64.AppImage`. A local build and launch check succeeded; clean-system portability remains unverified. See [Build instructions](BUILD.md) for building and running it. No GitHub Actions workflow is included in this checkout.
 
 ## Documentation
 

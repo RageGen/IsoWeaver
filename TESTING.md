@@ -20,7 +20,13 @@ Use `--offline` when the locked Cargo dependencies are already cached.
 
 Four test functions cover metadata grouping and missing boot data, real ISO copy saving and source/existing-target preservation, and GTK behavior. The GTK test includes click/Ctrl-click selection, dated filename collisions, embedded icon lookup, menu actions and disabled states, short-menu allocation, staged nested-folder previews and extraction, worker completion, and status-text bounds at 100%, 125%, and 150% text size.
 
-The suite and release build have passed locally. These checks do not establish complete functional or desktop visual coverage.
+The suite and release build have passed locally. Both the top image-status label and the footer entry count have allocation checks at the three text sizes. These checks do not establish complete functional or desktop visual coverage.
+
+## AppImage verification
+
+A local x86_64 AppImage build succeeded. The archive was extracted to check the bundled application, `7z`, `xorriso`, root PNG icon, and `.DirIcon` link. Bundled xorriso reported its version successfully. The AppImage stayed running during a three-second launch check using GTK Broadway and extraction mode; it was then stopped by the test timeout. Broadway emitted a frame-timing warning.
+
+This was a launch check, not an end-to-end ISO editing test or a clean-system portability test. Packaging still emits an AppStream metadata warning.
 
 ## Before release
 

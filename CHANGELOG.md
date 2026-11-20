@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed AppImage packaging to include the root-level PNG launcher icon; built and launch-checked the local x86_64 bundle.
+
 - Fixed plain-click and Ctrl-click selection.
 - Show staged host additions and nested folders immediately, including replacements and extraction of staged files.
 - Replaced Save and Save As with one action that writes a dated copy and preserves existing files.
