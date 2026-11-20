@@ -1,25 +1,26 @@
 # Architecture
 
-IsoWeaver is a GTK 4 desktop application written in Rust. The GTK window and user actions live in `src/main.rs`; ISO listing, extraction, modification, and validation are implemented in `src/backend.rs`.
+IsoWeaver is a Rust and GTK 4 desktop application. External tools are launched directly with argument vectors.
+
+## Components
+
+- `src/main.rs`: GTK layout, menus, dialogs, selection, session state, ISO listing, extraction, staged-add previews, and background operation dispatch.
+- `src/backend.rs`: staged change types, xorriso inspection, metadata formatting, ISO rebuilds, temporary output paths, and validation.
+- `src/runtime.rs`: resolves helpers bundled under `APPDIR/usr/bin`, falling back to `PATH` for source runs.
+- `build.rs` and `data/resources.xml`: compile application icons into a GLib resource embedded in the executable.
+- `data/applications` and `data/icons`: desktop launcher and installed icons.
+- `packaging/linux`: local installation and AppImage build scripts.
 
 ## Data flow
 
-1. The UI asks the backend to list the selected ISO using `7z`.
-2. The selected folder and its entries are shown in the directory and file panes.
-3. Editing actions are recorded as staged changes in the UI session.
-4. The backend extracts the source into a temporary work area, applies staged operations, and asks `xorriso` to create a temporary output image.
-5. The output is reopened and checked for detected boot data before it is copied into the destination.
+1. A worker lists the selected ISO with `7z`; GTK displays the entries.
+2. Editing commands accumulate in the session as `Change` values. Host additions also update the visible entry model and retain their source paths.
+3. Save chooses an unused dated filename beside the source. xorriso loads the source and applies the staged operations directly to a temporary sibling output; the application does not first extract the whole ISO.
+4. The result is reopened and checked for detected boot structures, then committed without replacing an existing dated destination.
+5. The editor loads the saved copy.
 
-External programs are launched directly with argument vectors. ISO contents are treated as untrusted data; extraction validates paths and refuses unsafe or conflicting destinations.
+Opening, extraction, inspection, and rebuilding run on worker threads. GTK polls their completion and displays modal pulsing progress bars. Recursive host-folder enumeration still runs on the GTK thread.
 
-## Main components
+## Boundaries
 
-- `src/main.rs`: GTK application setup, menus, toolbar, dialogs, browser panes, status, and staged edit state.
-- `src/backend.rs`: subprocess handling, image listing, safe extraction, temporary paths, ISO rebuild, and post-build checks.
-- `data/applications`: Linux desktop entry.
-- `data/icons`: scalable and 256-pixel application icon used by the desktop entry and About dialog.
-- `packaging/linux`: local Linux installation helper.
-
-## Constraints
-
-Operations currently run synchronously from GTK actions, so large images can temporarily block the interface. Boot verification checks the presence of detected structures rather than every boot parameter and metadata field. See [Known issues](KNOWN_ISSUES.md).
+Extraction validates image paths and destination components and refuses overwrites. Staged additions are extracted from host files; other entries are streamed from `7z`. Boot validation checks structure presence rather than complete metadata equivalence. See [Known issues](KNOWN_ISSUES.md).

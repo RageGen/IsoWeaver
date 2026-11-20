@@ -21,6 +21,8 @@ chmod 755 "$appdir"
 trap 'rm -rf "$appdir"' EXIT HUP INT TERM
 export APPIMAGE_EXTRACT_AND_RUN=1
 mkdir -p "$project_dir/dist"
+install -Dm644 "$project_dir/data/icons/scalable/apps/org.isoweaver.IsoWeaver.svg" \
+    "$appdir/usr/share/icons/hicolor/scalable/apps/org.isoweaver.IsoWeaver.svg"
 cd "$project_dir/dist"
 "$linuxdeploy" \
     --appdir "$appdir" \

@@ -20,6 +20,7 @@ struct Entry {
     path: String,
     directory: bool,
     size: u64,
+    source: Option<PathBuf>,
 }
 
 fn safe_image_path(raw: &str) -> Result<PathBuf, String> {
@@ -62,6 +63,7 @@ fn list_image(path: &Path) -> Result<Vec<Entry>, String> {
                         return Err(format!("Symbolic links are not supported: {name}"));
                     }
                     entries.push(Entry {
+                        source: None,
                         path: relative.to_string_lossy().into_owned(),
                         directory: fields.get("Folder").is_some_and(|value| value == "+"),
                         size: fields
@@ -80,6 +82,7 @@ fn list_image(path: &Path) -> Result<Vec<Entry>, String> {
 }
 
 fn main() -> glib::ExitCode {
+    gio::resources_register_include!("icons.gresource").expect("Embedded icons must load");
     let app = Application::builder()
         .application_id("org.isoweaver.IsoWeaver")
         .build();
@@ -92,7 +95,11 @@ fn build_ui(app: &Application) {
         return;
     }
 
+    gtk::Window::set_default_icon_name("org.isoweaver.IsoWeaver");
     install_theme();
+    if let Some(display) = gtk::gdk::Display::default() {
+        gtk::IconTheme::for_display(&display).add_resource_path("/org/isoweaver/IsoWeaver/icons");
+    }
     let window = ApplicationWindow::builder()
         .application(app)
         .title("IsoWeaver")
@@ -108,8 +115,7 @@ fn build_ui(app: &Application) {
     window.set_titlebar(Some(&header));
 
     let open = action_button("Open", "document-open-symbolic", "action-open", "Open an ISO image");
-    let save = action_button("Save", "document-save-symbolic", "action-save", "Save changes to the current image");
-    let save_as = action_button("Save As", "document-save-as-symbolic", "action-save", "Save changes to a new image file");
+    let save = action_button("Save", "document-save-symbolic", "action-save", "Save a dated edited copy beside the source image");
     let add_files = action_button("Add Files", "list-add-symbolic", "action-add", "Add host files to the current image folder");
     let add_directory = action_button("Add Folder", "folder-new-symbolic", "action-add", "Add a host folder to the image");
     let extract = action_button("Extract Selected", "go-up-symbolic", "action-extract", "Extract selected entries to your computer");
@@ -124,10 +130,10 @@ fn build_ui(app: &Application) {
     let about_action = Button::with_label("About IsoWeaver");
     about_action.add_css_class("flat");
 
-    let edit_menu = [("Rename Selected", &rename), ("New Folder in Image", &create_directory)];
-    let view_menu = [("Search image contents", &search_action)];
-    let tools_menu = [("Image Information", &image_info)];
-    let help_menu = [("About IsoWeaver", &about_action)];
+    let edit_menu = [("_Rename Selected", &rename), ("_New Folder in Image", &create_directory)];
+    let view_menu = [("_Search Image Contents", &search_action)];
+    let tools_menu = [("Image _Information", &image_info)];
+    let help_menu = [("_About IsoWeaver", &about_action)];
     let menu_panel = GtkBox::new(Orientation::Horizontal, 2);
     menu_panel.set_margin_start(12);
     menu_panel.set_margin_end(12);
@@ -144,7 +150,7 @@ fn build_ui(app: &Application) {
     toolbar.set_margin_top(10);
     toolbar.set_margin_bottom(10);
     toolbar.add_css_class("toolbar-row");
-    for button in [&open, &save, &save_as] { toolbar.append(button); }
+    for button in [&open, &save] { toolbar.append(button); }
     toolbar.append(&gtk::Separator::new(Orientation::Vertical));
     for button in [&add_files, &add_directory] { toolbar.append(button); }
     toolbar.append(&gtk::Separator::new(Orientation::Vertical));
@@ -159,6 +165,7 @@ fn build_ui(app: &Application) {
     let image_state_label = Label::new(Some("Ready to open an image"));
     image_state_label.set_xalign(1.0);
     image_state_label.add_css_class("status-badge");
+    image_state_label.add_css_class("status-text");
     let session_banner = GtkBox::new(Orientation::Horizontal, 12);
     session_banner.set_margin_start(16);
     session_banner.set_margin_end(16);
@@ -181,12 +188,13 @@ fn build_ui(app: &Application) {
         .child(&tree)
         .build();
     let sidebar = GtkBox::new(Orientation::Vertical, 8);
-    sidebar.set_margin_start(12);
-    sidebar.set_margin_end(8);
+    sidebar.set_margin_start(0);
+    sidebar.set_margin_end(0);
     sidebar.set_margin_top(12);
     sidebar.add_css_class("isoweaver-sidebar");
-    let tree_heading = Label::new(Some("IMAGE TREE"));
+    let tree_heading = Label::new(Some("Folders"));
     tree_heading.set_xalign(0.0);
+    tree_heading.set_margin_start(16);
     tree_heading.add_css_class("section-heading");
     sidebar.append(&tree_heading);
     sidebar.append(&tree_scroll);
@@ -195,23 +203,22 @@ fn build_ui(app: &Application) {
     file_list.set_selection_mode(SelectionMode::Multiple);
     file_list.set_tooltip_text(Some("Click to select; Ctrl-click to add or remove files from the selection"));
     file_list.add_css_class("file-list");
-    let ctrl_click = gtk::GestureClick::new();
-    ctrl_click.set_button(1);
-    ctrl_click.set_propagation_phase(gtk::PropagationPhase::Capture);
-    let list_for_ctrl_click = file_list.clone();
-    ctrl_click.connect_pressed(move |gesture, _, _, y| {
-        if gesture.current_event_state().contains(gtk::gdk::ModifierType::CONTROL_MASK) {
-            if let Some(row) = list_for_ctrl_click.row_at_y(y.floor() as i32) {
-                if row.is_selected() {
-                    list_for_ctrl_click.unselect_row(&row);
-                } else {
-                    list_for_ctrl_click.select_row(Some(&row));
-                }
-                let _ = gesture.set_state(gtk::EventSequenceState::Claimed);
+    let click = gtk::GestureClick::new();
+    click.set_button(1);
+    click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let list_for_click = file_list.clone();
+    click.connect_pressed(move |gesture, presses, _, y| {
+        if let Some(row) = list_for_click.row_at_y(y.floor() as i32) {
+            let control = gesture.current_event_state().contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            select_clicked_row(&list_for_click, &row, control);
+            row.grab_focus();
+            let _ = gesture.set_state(gtk::EventSequenceState::Claimed);
+            if presses == 2 && !control {
+                row.emit_activate();
             }
         }
     });
-    file_list.add_controller(ctrl_click);
+    file_list.add_controller(click);
     let file_scroll = ScrolledWindow::builder()
         .hexpand(true)
         .vexpand(true)
@@ -267,6 +274,7 @@ fn build_ui(app: &Application) {
 
     let status = Label::new(Some("Ready · Open an ISO image to begin"));
     status.set_xalign(0.0);
+    status.add_css_class("status-text");
     let selection_status = status.clone();
     file_list.connect_selected_rows_changed(move |list| {
         let count = list.selected_rows().len();
@@ -275,13 +283,6 @@ fn build_ui(app: &Application) {
         }
     });
     status.set_hexpand(true);
-    let progress = ProgressBar::new();
-    progress.set_show_text(true);
-    progress.set_text(Some("Operations appear here"));
-    progress.set_fraction(0.0);
-    progress.set_size_request(220, -1);
-    let cancel = Button::with_label("Cancel");
-    cancel.set_sensitive(false);
     let operation_panel = GtkBox::new(Orientation::Horizontal, 12);
     operation_panel.set_margin_start(16);
     operation_panel.set_margin_end(16);
@@ -289,8 +290,6 @@ fn build_ui(app: &Application) {
     operation_panel.set_margin_bottom(12);
     operation_panel.add_css_class("operation-panel");
     operation_panel.append(&status);
-    operation_panel.append(&progress);
-    operation_panel.append(&cancel);
     root.append(&operation_panel);
     window.set_child(Some(&root));
 
@@ -385,16 +384,41 @@ fn build_ui(app: &Application) {
     search_action.connect_clicked(move |_| { search_focus.grab_focus(); });
     let about_parent = window_state.clone();
     about_action.connect_clicked(move |_| {
-        let about = gtk::AboutDialog::builder().transient_for(&about_parent).modal(true).program_name("IsoWeaver").version(env!("CARGO_PKG_VERSION")).comments("A native Linux application for browsing, extracting, and editing ISO images.").build();
-        if let Ok(logo_pixbuf) = gdk_pixbuf::Pixbuf::from_read(
+        let about = gtk::Dialog::builder()
+            .transient_for(&about_parent).modal(true).title("About IsoWeaver")
+            .default_width(420).resizable(false).build();
+        let close = about.add_button("Close", gtk::ResponseType::Close);
+        close.set_margin_start(12);
+        close.set_margin_end(12);
+        close.set_margin_top(8);
+        close.set_margin_bottom(12);
+        about.connect_response(|dialog, _| dialog.close());
+        let content = GtkBox::new(Orientation::Vertical, 12);
+        content.set_margin_top(24);
+        content.set_margin_bottom(24);
+        content.set_margin_start(24);
+        content.set_margin_end(24);
+        if let Ok(pixbuf) = gdk_pixbuf::Pixbuf::from_read(
             std::io::Cursor::new(include_bytes!("../data/icons/256x256/apps/org.isoweaver.IsoWeaver.png")),
         ) {
-            let logo = gtk::gdk::Texture::for_pixbuf(&logo_pixbuf);
-            about.set_logo(Some(&logo));
+            let logo = gtk::Image::from_paintable(Some(&gtk::gdk::Texture::for_pixbuf(&pixbuf)));
+            logo.set_pixel_size(96);
+            content.append(&logo);
         }
-        about.set_copyright(Some("Copyright (C) 2026 IsoWeaver contributors"));
-        about.set_license_type(gtk::License::Custom);
-        about.set_license(Some("IsoWeaver is licensed under GPL-3.0-or-later. The complete license text is included in the LICENSE file."));
+        let title = Label::new(Some(&format!("IsoWeaver {}", env!("CARGO_PKG_VERSION"))));
+        title.add_css_class("title-1");
+        content.append(&title);
+        let description = Label::new(Some("Browse, extract, and edit ISO images on Linux."));
+        description.set_wrap(true);
+        description.set_selectable(true);
+        description.set_xalign(0.5);
+        description.set_justify(gtk::Justification::Center);
+        content.append(&description);
+        content.append(&gtk::LinkButton::with_label(
+            "https://www.gnu.org/licenses/gpl-3.0.html",
+            "GNU GPL version 3 or later",
+        ));
+        about.content_area().append(&content);
         about.present();
     });
 
@@ -457,9 +481,16 @@ fn build_ui(app: &Application) {
     let all = all_entries.clone();
     let dir = current_dir.clone();
     let pending = changes.clone();
+    let preview = AddPreview {
+        all: all_entries.clone(), visible: visible_entries.clone(), dir: current_dir.clone(),
+        tree: tree.clone(), tree_paths: tree_paths.clone(), list: file_list.clone(),
+        breadcrumb: breadcrumb.clone(), search: search.clone(),
+    };
+    let preview_files = preview.clone();
     let status_add = status.clone();
     let state_add = image_state_label.clone();
     add_files.connect_clicked(move |_| {
+        let preview = preview_files.clone();
         if current.borrow().is_none() { return; }
         let parent = parent.clone();
         let all = all.clone();
@@ -478,10 +509,10 @@ fn build_ui(app: &Application) {
                 let status = status.clone();
                 let image_state = image_state.clone();
                 confirm(&parent_for_callback, "Replace image entries?", "Some selected names already exist in this folder. They will be replaced when saved.", move |yes| {
-                    if yes { stage_adds(&candidates, &pending, &status, &image_state); }
+                    if yes { stage_adds(&candidates, &pending, &status, &image_state, &preview); }
                 });
             } else {
-                stage_adds(&candidates, &pending, &status, &image_state);
+                stage_adds(&candidates, &pending, &status, &image_state, &preview);
             }
         });
     });
@@ -494,6 +525,7 @@ fn build_ui(app: &Application) {
     let status_add_dir = status.clone();
     let state_add_dir = image_state_label.clone();
     add_directory.connect_clicked(move |_| {
+        let preview = preview.clone();
         if current.borrow().is_none() { return; }
         let parent = parent.clone();
         let dir = dir.borrow().clone();
@@ -513,10 +545,10 @@ fn build_ui(app: &Application) {
                 let status = status.clone();
                 let image_state = image_state.clone();
                 confirm(&parent_for_callback, "Replace image directory?", "This directory already exists in the image and will be replaced when saved.", move |yes| {
-                    if yes { stage_adds(&candidates, &pending, &status, &image_state); }
+                    if yes { stage_adds(&candidates, &pending, &status, &image_state, &preview); }
                 });
             } else {
-                stage_adds(&candidates, &pending, &status, &image_state);
+                stage_adds(&candidates, &pending, &status, &image_state, &preview);
             }
         });
     });
@@ -602,13 +634,14 @@ fn build_ui(app: &Application) {
 
     let parent = window_state.clone();
     let current = current_state.clone();
-    let info_label = current_image_label.clone();
     image_info.connect_clicked(move |_| {
         let Some(image) = current.borrow().clone() else { return };
-        match inspect_boot(&image) {
-            Ok(report) => info_dialog(&parent, &format!("Image Information · {}", info_label.text()), &report),
+        let parent = parent.clone();
+        let source = image.clone();
+        run_operation(&parent.clone(), "Reading image information…", move || inspect_boot(&source), move |result| match result {
+            Ok(report) => image_information_dialog(&parent, &image, &report),
             Err(error) => error_dialog(&parent, &error),
-        }
+        });
     });
 
     let parent = window_state.clone();
@@ -625,7 +658,9 @@ fn build_ui(app: &Application) {
         let parent_for_callback = parent.clone();
         choose_one(&parent, FileChooserAction::SelectFolder, "Choose extraction folder", move |destination| {
             if let Some(destination) = destination {
-                if let Err(error) = extract_entries(&image, &destination, &expanded) { error_dialog(&parent_for_callback, &error); }
+                run_operation(&parent_for_callback.clone(), "Extracting image contents…",
+                    move || extract_entries(&image, &destination, &expanded),
+                    move |result| if let Err(error) = result { error_dialog(&parent_for_callback, &error); });
             }
         });
     });
@@ -640,7 +675,9 @@ fn build_ui(app: &Application) {
         let parent_for_callback = parent.clone();
         choose_one(&parent, FileChooserAction::SelectFolder, "Choose extraction folder", move |destination| {
             if let Some(destination) = destination {
-                if let Err(error) = extract_entries(&image, &destination, &entries) { error_dialog(&parent_for_callback, &error); }
+                run_operation(&parent_for_callback.clone(), "Extracting image contents…",
+                    move || extract_entries(&image, &destination, &entries),
+                    move |result| if let Err(error) = result { error_dialog(&parent_for_callback, &error); });
             }
         });
     });
@@ -665,53 +702,10 @@ fn build_ui(app: &Application) {
         if staged.is_empty() { return; }
         let state = SaveUi { tree: tree.clone(), title: title.clone(), image_state: image_state.clone(), status: status_save.clone(), list: list.clone(), all: all.clone(), visible: visible.clone(), current: current.clone(), dir: dir.clone(), tree_paths: tree_paths.clone(), breadcrumb: breadcrumb.clone(), search: search_save.clone(), pending: pending.clone() };
         let parent = window_for_save.clone();
-        let parent_for_callback = parent.clone();
-        confirm(&parent, "Save image changes?", "The ISO will be rebuilt and replace the current image only after validation.", move |yes| {
-            if yes { finish_save(&parent_for_callback, &image, &image, &staged, true, &state); }
-        });
-    });
-
-    let current = current_state.clone();
-    let pending = changes.clone();
-    let all = all_entries.clone();
-    let visible = visible_entries.clone();
-    let dir = current_dir.clone();
-    let tree = tree_widget.clone();
-    let tree_paths = tree_paths_state.clone();
-    let title = current_image_label.clone();
-    let image_state = image_state_label.clone();
-    let status_save = status.clone();
-    let breadcrumb = breadcrumb_widget.clone();
-    let search_save = search.clone();
-    let list = file_list.clone();
-    let window_for_save_as = window_state.clone();
-    save_as.connect_clicked(move |_| {
-        let Some(image) = current.borrow().clone() else { return };
-        let staged = pending.borrow().clone();
-        if staged.is_empty() { return; }
-        let chooser = FileChooserNative::new(Some("Save modified image as"), Some(&window_for_save_as), FileChooserAction::Save, Some("Save"), Some("Cancel"));
-        chooser.set_current_name(image.file_name().and_then(|name| name.to_str()).unwrap_or("image.iso"));
-        let window_for_response = window_for_save_as.clone();
-        let state = SaveUi { tree: tree.clone(), title: title.clone(), image_state: image_state.clone(), status: status_save.clone(), list: list.clone(), all: all.clone(), visible: visible.clone(), current: current.clone(), dir: dir.clone(), tree_paths: tree_paths.clone(), breadcrumb: breadcrumb.clone(), search: search_save.clone(), pending: pending.clone() };
-        chooser.connect_response(move |dialog, response| {
-            if response == gtk::ResponseType::Accept {
-                if let Some(target) = dialog.file().and_then(|file| file.path()) {
-                    let image = image.clone();
-                    let staged = staged.clone();
-                    let state = state.clone();
-                    let parent = window_for_response.clone();
-                    if target.exists() {
-                        confirm(&window_for_response, "Replace existing image?", "The file will be replaced only after the rebuilt image is validated.", move |yes| {
-                            if yes { finish_save(&parent, &image, &target, &staged, true, &state); }
-                        });
-                    } else {
-                        finish_save(&window_for_response, &image, &target, &staged, false, &state);
-                    }
-                }
-            }
-            dialog.destroy();
-        });
-        chooser.show();
+        match dated_image_path(&image) {
+            Ok(target) => finish_save(&parent, &image, &target, &staged, false, &state),
+            Err(error) => error_dialog(&parent, &error),
+        }
     });
 
     let pending_close = changes.clone();
@@ -761,7 +755,23 @@ fn load_image(
     breadcrumb: &Label,
     search: &gtk::SearchEntry,
 ) {
-    match list_image(path) {
+    let parent = file_list.root().and_downcast::<ApplicationWindow>().expect("Image browser window");
+    let file_list = file_list.clone();
+    let tree = tree.clone();
+    let title = title.clone();
+    let image_state = image_state.clone();
+    let status = status.clone();
+    let current = current.clone();
+    let all = all.clone();
+    let visible = visible.clone();
+    let dir = dir.clone();
+    let tree_paths = tree_paths.clone();
+    let breadcrumb = breadcrumb.clone();
+    let search = search.clone();
+    let path = path.to_path_buf();
+    let source = path.clone();
+    run_operation(&parent, "Opening image…", move || list_image(&source), move |result| {
+    match result {
         Ok(mut entries) => {
             entries.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
             *current.borrow_mut() = Some(path.to_path_buf());
@@ -769,16 +779,16 @@ fn load_image(
             *dir.borrow_mut() = String::new();
             title.set_text(path.file_name().and_then(|name| name.to_str()).unwrap_or("Image"));
             image_state.set_text("ISO image · Clean");
-            render_tree(tree, &all.borrow(), tree_paths);
-            render_files(file_list, &all.borrow(), visible, &dir.borrow(), &search.text(), breadcrumb);
+            render_tree(&tree, &all.borrow(), &tree_paths);
+            render_files(&file_list, &all.borrow(), &visible, &dir.borrow(), &search.text(), &breadcrumb);
             status.set_text(&format!("{} entries · Select files to extract or edit", all.borrow().len()));
         }
         Err(error) => {
             *current.borrow_mut() = None;
             all.borrow_mut().clear();
             visible.borrow_mut().clear();
-            clear_list(file_list);
-            clear_list(tree);
+            clear_list(&file_list);
+            clear_list(&tree);
             tree_paths.borrow_mut().clear();
             title.set_text("No image open");
             image_state.set_text("Ready to open an image");
@@ -786,6 +796,7 @@ fn load_image(
             status.set_text(&format!("Could not open image: {error}"));
         }
     }
+    });
 }
 
 fn render_tree(tree: &ListBox, entries: &[Entry], paths: &Rc<RefCell<Vec<String>>>) {
@@ -849,7 +860,7 @@ fn render_files(
         size.set_width_chars(12);
         size.set_xalign(1.0);
         size.add_css_class("dim-label");
-        let kind = Label::new(Some(if entry.directory { "Directory" } else { file_type(&entry.path) }));
+        let kind = Label::new(Some(if entry.source.is_some() { "Added (unsaved)" } else if entry.directory { "Directory" } else { file_type(&entry.path) }));
         kind.set_width_chars(14);
         kind.set_xalign(0.0);
         kind.add_css_class("dim-label");
@@ -909,23 +920,91 @@ fn map_sources(sources: Vec<PathBuf>, directory: &str, status: &Label) -> Vec<(P
     mapped
 }
 
-fn stage_adds(candidates: &[(PathBuf, String)], pending: &Rc<RefCell<Vec<Change>>>, status: &Label, image_state: &Label) {
-    let mut changes = pending.borrow_mut();
-    for (source, image_path) in candidates {
-        if !changes.iter().any(|change| matches!(change, Change::Add { image_path: existing, .. } if existing == image_path)) {
-            changes.push(Change::Add { source: source.clone(), image_path: image_path.clone() });
+#[derive(Clone)]
+struct AddPreview {
+    all: Rc<RefCell<Vec<Entry>>>,
+    visible: Rc<RefCell<Vec<Entry>>>,
+    dir: Rc<RefCell<String>>,
+    tree: ListBox,
+    tree_paths: Rc<RefCell<Vec<String>>>,
+    list: ListBox,
+    breadcrumb: Label,
+    search: gtk::SearchEntry,
+}
+
+fn collect_added_entries(source: &Path, image_path: &str) -> Result<Vec<Entry>, String> {
+    let metadata = std::fs::symlink_metadata(source).map_err(|error| error.to_string())?;
+    if metadata.file_type().is_symlink() || (!metadata.is_dir() && !metadata.is_file()) {
+        return Err(format!("Unsupported added file: {}", source.display()));
+    }
+    let mut entries = vec![Entry { path: image_path.trim_start_matches('/').into(),
+        directory: metadata.is_dir(), size: metadata.len(), source: Some(source.to_path_buf()) }];
+    if metadata.is_dir() {
+        for child in std::fs::read_dir(source).map_err(|error| error.to_string())? {
+            let child = child.map_err(|error| error.to_string())?;
+            let name = child.file_name().into_string().map_err(|_| "Non-Unicode filename".to_owned())?;
+            entries.extend(collect_added_entries(&child.path(), &format!("{image_path}/{name}"))?);
         }
     }
-    status.set_text(&format!("Modified · {} pending changes", changes.len()));
+    Ok(entries)
+}
+
+fn merge_added_entries(all: &mut Vec<Entry>, additions: Vec<Entry>) {
+    for entry in additions {
+        if let Some(existing) = all.iter_mut().find(|existing| existing.path == entry.path) {
+            *existing = entry;
+        } else { all.push(entry); }
+    }
+}
+
+fn stage_adds(candidates: &[(PathBuf, String)], pending: &Rc<RefCell<Vec<Change>>>, status: &Label, image_state: &Label, preview: &AddPreview) {
+    let additions = match candidates.iter().try_fold(Vec::new(), |mut entries, (source, path)| {
+        entries.extend(collect_added_entries(source, path)?);
+        Ok::<_, String>(entries)
+    }) {
+        Ok(entries) => entries,
+        Err(error) => { status.set_text(&format!("Could not add files: {error}")); return; }
+    };
+    let count = {
+        let mut changes = pending.borrow_mut();
+        for (source, image_path) in candidates {
+            if let Some(change) = changes.iter_mut().find(|change| matches!(change, Change::Add { image_path: existing, .. } if existing == image_path)) {
+                *change = Change::Add { source: source.clone(), image_path: image_path.clone() };
+            } else {
+                changes.push(Change::Add { source: source.clone(), image_path: image_path.clone() });
+            }
+        }
+        changes.len()
+    };
+    merge_added_entries(&mut preview.all.borrow_mut(), additions);
+    let directory = preview.dir.borrow().clone();
+    // Clear active filters so successful additions are immediately visible.
+    preview.search.set_text("");
+    render_tree(&preview.tree, &preview.all.borrow(), &preview.tree_paths);
+    let index = preview.tree_paths.borrow().iter().position(|path| path == &directory);
+    if let Some(row) = index.and_then(|index| preview.tree.row_at_index(index as i32)) {
+        preview.tree.select_row(Some(&row));
+    }
+    *preview.dir.borrow_mut() = directory.clone();
+    render_files(&preview.list, &preview.all.borrow(), &preview.visible, &directory, "", &preview.breadcrumb);
+    status.set_text(&format!("Added to editor · {count} pending changes"));
     image_state.set_text("Modified (*) · Unsaved changes");
 }
 
 fn finish_save(parent: &ApplicationWindow, input: &Path, target: &Path, changes: &[Change], replace: bool, ui: &SaveUi) {
     ui.status.set_text("Rebuilding and validating image…");
-    match save_image(input, target, changes, replace) {
+    let input = input.to_path_buf();
+    let target = target.to_path_buf();
+    let output = target.clone();
+    let changes = changes.to_vec();
+    let ui = ui.clone();
+    let parent = parent.clone();
+    run_operation(&parent.clone(), "Saving and validating edited image…",
+        move || save_image(&input, &output, &changes, replace), move |result| {
+    match result {
         Ok(()) => {
             ui.pending.borrow_mut().clear();
-            load_image(target, &ui.list, &ui.tree, &ui.title, &ui.image_state, &ui.status, &ui.current, &ui.all, &ui.visible, &ui.dir, &ui.tree_paths, &ui.breadcrumb, &ui.search);
+            load_image(&target, &ui.list, &ui.tree, &ui.title, &ui.image_state, &ui.status, &ui.current, &ui.all, &ui.visible, &ui.dir, &ui.tree_paths, &ui.breadcrumb, &ui.search);
             ui.image_state.set_text("ISO image · Clean");
             ui.status.set_text("Saved · rebuilt image reopened successfully");
             let _ = parent;
@@ -933,9 +1012,10 @@ fn finish_save(parent: &ApplicationWindow, input: &Path, target: &Path, changes:
         Err(error) => {
             ui.image_state.set_text("Modified · Save failed");
             ui.status.set_text("Save failed · original image preserved");
-            error_dialog(parent, &error);
+            error_dialog(&parent, &error);
         }
     }
+    });
 }
 
 fn extract_entries(image: &Path, destination: &Path, entries: &[Entry]) -> Result<(), String> {
@@ -971,6 +1051,11 @@ fn extract_entries(image: &Path, destination: &Path, entries: &[Entry]) -> Resul
             continue;
         }
         let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&target).map_err(|error| format!("Cannot create {}: {error}", target.display()))?;
+        if let Some(source) = &entry.source {
+            let mut input = std::fs::File::open(source).map_err(|error| error.to_string())?;
+            std::io::copy(&mut input, &mut file).map_err(|error| error.to_string())?;
+            continue;
+        }
         let mut child = runtime::command("7z").arg("x").arg("-so").arg("--").arg(image).arg(&entry.path).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|error| error.to_string())?;
         if let Some(mut stdout) = child.stdout.take() { std::io::copy(&mut stdout, &mut file).map_err(|error| error.to_string())?; }
         file.flush().map_err(|error| error.to_string())?;
@@ -1048,17 +1133,68 @@ fn error_dialog(parent: &ApplicationWindow, message: &str) {
     dialog.show();
 }
 
-fn info_dialog(parent: &ApplicationWindow, title: &str, message: &str) {
-    let dialog = gtk::MessageDialog::builder().transient_for(parent).modal(true).message_type(gtk::MessageType::Info).buttons(gtk::ButtonsType::Close).text(title).secondary_text(message).build();
+fn image_information_dialog(parent: &ApplicationWindow, image: &Path, report: &str) {
+    let dialog = gtk::Dialog::builder().transient_for(parent).modal(true)
+        .title("Image Information").default_width(760).default_height(620).build();
+    dialog.add_button("Close", gtk::ResponseType::Close);
     dialog.connect_response(|dialog, _| dialog.close());
-    dialog.show();
+    let content = GtkBox::new(Orientation::Vertical, 16);
+    content.set_margin_top(16);
+    content.set_margin_bottom(16);
+    content.set_margin_start(20);
+    content.set_margin_end(20);
+    let heading = Label::new(Some(image.file_name().and_then(|name| name.to_str()).unwrap_or("ISO image")));
+    heading.add_css_class("title-2");
+    heading.set_xalign(0.0);
+    content.append(&heading);
+    let mut sections = backend::information_sections(report);
+    let mut file = vec![("Location".into(), image.display().to_string())];
+    if let Ok(metadata) = image.metadata() {
+        file.push(("File size".into(), format!("{} ({} bytes)", format_size(metadata.len()), metadata.len())));
+    }
+    sections.insert(0, ("Image file".into(), file));
+    for (title, fields) in sections {
+        let section = GtkBox::new(Orientation::Vertical, 8);
+        let title = Label::new(Some(&title));
+        title.add_css_class("heading");
+        title.set_xalign(0.0);
+        section.append(&title);
+        let grid = gtk::Grid::builder().column_spacing(20).row_spacing(8).build();
+        for (index, (name, value)) in fields.iter().enumerate() {
+            let key = Label::new(Some(name));
+            key.set_xalign(0.0);
+            key.set_valign(gtk::Align::Start);
+            key.add_css_class("dim-label");
+            let value = Label::new(Some(value));
+            value.set_xalign(0.0);
+            value.set_wrap(true);
+            value.set_selectable(true);
+            value.set_hexpand(true);
+            grid.attach(&key, 0, index as i32, 1, 1);
+            grid.attach(&value, 1, index as i32, 1, 1);
+        }
+        section.append(&grid);
+        content.append(&section);
+    }
+    let details = gtk::Expander::new(Some("Full xorriso report"));
+    let text = gtk::TextView::new();
+    text.set_editable(false);
+    text.set_cursor_visible(false);
+    text.set_monospace(true);
+    text.set_wrap_mode(gtk::WrapMode::WordChar);
+    text.buffer().set_text(report);
+    details.set_child(Some(&text));
+    content.append(&details);
+    let scroll = ScrolledWindow::builder().hexpand(true).vexpand(true).child(&content).build();
+    dialog.content_area().append(&scroll);
+    dialog.present();
 }
 
 fn action_button(label: &str, icon: &str, style: &str, tooltip: &str) -> Button {
     let button = Button::new();
     let content = GtkBox::new(Orientation::Horizontal, 7);
     let image = gtk::Image::from_icon_name(icon);
-    image.set_pixel_size(18);
+    image.set_pixel_size(16);
     content.append(&image);
     content.append(&Label::new(Some(label)));
     button.set_child(Some(&content));
@@ -1078,48 +1214,50 @@ fn dropdown_menu(label: &str, actions: &[(&str, &Button)]) -> gtk::MenuButton {
     button
 }
 
-fn command_popover(actions: &[(&str, &Button)]) -> gtk::Popover {
-    let popover = gtk::Popover::new();
-    let items = GtkBox::new(Orientation::Vertical, 2);
-    items.set_margin_top(6);
-    items.set_margin_bottom(6);
-    items.set_margin_start(6);
-    items.set_margin_end(6);
-    for (label, action) in actions {
-        let item = Button::with_label(label);
-        item.set_halign(gtk::Align::Fill);
-        item.add_css_class("flat");
-        let target = (*action).clone();
-        let popover_for_click = popover.clone();
-        item.connect_clicked(move |_| { popover_for_click.popdown(); target.emit_clicked(); });
-        items.append(&item);
+fn command_popover(actions: &[(&str, &Button)]) -> gtk::PopoverMenu {
+    let model = gio::Menu::new();
+    let group = gio::SimpleActionGroup::new();
+    for (index, (label, button)) in actions.iter().enumerate() {
+        let name = format!("item{index}");
+        let action = gio::SimpleAction::new(&name, None);
+        action.set_enabled(button.is_sensitive());
+        let target = (*button).clone();
+        action.connect_activate(move |_, _| target.emit_clicked());
+        let action_for_state = action.clone();
+        button.connect_sensitive_notify(move |button| action_for_state.set_enabled(button.is_sensitive()));
+        group.add_action(&action);
+        model.append(Some(label), Some(&format!("commands.{name}")));
     }
-    popover.set_child(Some(&items));
+    let popover = gtk::PopoverMenu::from_model(Some(&model));
+    popover.insert_action_group("commands", Some(&group));
+    popover.set_has_arrow(false);
+    popover.set_halign(gtk::Align::Start);
+    popover.add_css_class("isoweaver-menu");
     popover
 }
 
 fn install_theme() {
     let provider = gtk::CssProvider::new();
     provider.load_from_data(
-        ".menu-panel { padding: 2px 4px; border-bottom: 1px solid alpha(currentColor, 0.10); }\
-         .menu-panel menubutton { padding: 3px 8px; }\
-         .toolbar-row button { padding: 7px 10px; }\
-         .toolbar-action image { -gtk-icon-size: 18px; }\
-         .action-open image { color: #3584e4; }\
-         .action-save image { color: #26a269; }\
-         .action-add image { color: #9141ac; }\
-         .action-extract image { color: #e5a50a; }\
-         .action-delete image { color: #c01c28; }\
-         .action-edit image { color: #613583; }\
-         .session-banner { margin-top: 2px; padding: 12px 16px; border-radius: 12px; background: alpha(@accent_bg_color, 0.12); }\
-         .image-title { font-weight: 700; font-size: 1.05em; }\
-         .status-badge { padding: 5px 10px; border-radius: 999px; background: alpha(@accent_bg_color, 0.18); font-weight: 600; }\
-         .isoweaver-sidebar { border-right: 1px solid alpha(currentColor, 0.10); }\
-         .section-heading, .column-heading { font-size: 0.82em; font-weight: 700; letter-spacing: 0.04em; opacity: 0.75; }\
-         .file-list-header { border-bottom: 1px solid alpha(currentColor, 0.12); }\
-         .file-list row { border-bottom: 1px solid alpha(currentColor, 0.06); }\
-         .file-list row:selected { border-radius: 8px; }\
-         .operation-panel { padding-top: 8px; border-top: 1px solid alpha(currentColor, 0.12); }",
+        ".menu-panel { padding: 4px 0; border-bottom: 1px solid alpha(currentColor, 0.10); }\
+         .menu-panel menubutton > button { padding: 6px 12px; }\
+         .isoweaver-menu contents { padding: 6px; }\
+         .isoweaver-menu scrollbar.vertical, .isoweaver-menu scrollbar.vertical slider { min-height: 0; }\
+         .isoweaver-menu modelbutton { min-height: 32px; padding: 2px 12px; border-radius: 6px; }\
+         .toolbar-row button { padding: 6px 10px; }\
+         .toolbar-row separator { margin: 4px 6px; }\
+         .toolbar-action image { -gtk-icon-size: 16px; }\
+         .session-banner { padding: 8px 0; border-bottom: 1px solid alpha(currentColor, 0.10); }\
+         .image-title { font-weight: 700; }\
+         .status-badge { opacity: 0.70; }\
+         .status-text { padding: 8px 0; }\
+         .isoweaver-sidebar { background: alpha(currentColor, 0.035); border-right: 1px solid alpha(currentColor, 0.10); }\
+         .directory-tree { background: transparent; }\
+         .directory-tree row { border-radius: 6px; margin: 2px 6px; }\
+         .section-heading, .column-heading { font-size: 0.90em; font-weight: 600; opacity: 0.70; }\
+         .file-list-header { border-bottom: 1px solid alpha(currentColor, 0.10); }\
+         .file-list row { border-radius: 4px; margin: 1px 4px; }\
+         .operation-panel { padding-top: 8px; border-top: 1px solid alpha(currentColor, 0.10); }",
     );
     if let Some(display) = gtk::gdk::Display::default() {
         gtk::style_context_add_provider_for_display(&display, &provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
@@ -1141,4 +1279,210 @@ fn format_size(bytes: u64) -> String {
 
 fn clear_list(list: &ListBox) {
     while let Some(row) = list.row_at_index(0) { list.remove(&row); }
+}
+
+// Handle both click modes before GTK's default multiple-selection gesture.
+fn select_clicked_row(list: &ListBox, row: &ListBoxRow, control: bool) {
+    if control && row.is_selected() {
+        list.unselect_row(row);
+    } else {
+        if !control {
+            list.unselect_all();
+        }
+        list.select_row(Some(row));
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    #[test]
+    fn traditional_file_selection() {
+        gtk::init().expect("GTK display required for selection test");
+        gio::resources_register_include!("icons.gresource").unwrap();
+        let theme = gtk::IconTheme::for_display(&gtk::gdk::Display::default().unwrap());
+        theme.add_resource_path("/org/isoweaver/IsoWeaver/icons");
+        assert!(theme.has_icon("org.isoweaver.IsoWeaver"));
+        let folder = std::env::temp_dir().join(format!("isoweaver-name-test-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let source = folder.join("example.iso");
+        let first = dated_image_path(&source).unwrap();
+        assert!(first.file_name().unwrap().to_string_lossy().starts_with("example_edited_"));
+        assert_ne!(first, source);
+        std::fs::write(&first, "existing").unwrap();
+        assert_ne!(dated_image_path(&source).unwrap(), first);
+        std::fs::remove_dir_all(folder).unwrap();
+        install_theme();
+        let command = Button::with_label("Test command");
+        let activated = Rc::new(RefCell::new(0));
+        let count = activated.clone();
+        command.connect_clicked(move |_| *count.borrow_mut() += 1);
+        let menu = command_popover(&[("_Test Command", &command)]);
+        let host = gtk::Window::new();
+        let anchor = dropdown_menu("Test", &[("_Test Command", &command)]);
+        host.set_child(Some(&anchor));
+        host.present();
+        anchor.popup();
+        let until = std::time::Instant::now() + std::time::Duration::from_millis(250);
+        while std::time::Instant::now() < until { glib::MainContext::default().iteration(false); }
+        let popover = anchor.popover().unwrap();
+        let scroller = popover.first_child().unwrap().first_child().unwrap();
+        let viewport = scroller.first_child().unwrap();
+        let natural = viewport.measure(Orientation::Vertical, -1).1;
+        assert!(viewport.height() <= natural + 2, "Menu has {}px of unused bottom space", viewport.height() - natural);
+        host.destroy();
+
+        menu.activate_action("commands.item0", None).unwrap();
+        assert_eq!(*activated.borrow(), 1);
+        command.set_sensitive(false);
+        menu.activate_action("commands.item0", None).unwrap();
+        assert_eq!(*activated.borrow(), 1);
+        command.set_sensitive(true);
+        menu.activate_action("commands.item0", None).unwrap();
+        assert_eq!(*activated.borrow(), 2);
+        let list = ListBox::new();
+        list.set_selection_mode(SelectionMode::Multiple);
+        let rows: Vec<_> = (0..3).map(|_| {
+            let row = ListBoxRow::new();
+            list.append(&row);
+            row
+        }).collect();
+        let selected = || list.selected_rows().iter().map(|row| row.index()).collect::<Vec<_>>();
+        select_clicked_row(&list, &rows[0], false);
+        assert_eq!(selected(), vec![0]);
+        select_clicked_row(&list, &rows[0], false);
+        assert_eq!(selected(), vec![0]);
+        select_clicked_row(&list, &rows[1], true);
+        assert_eq!(selected(), vec![0, 1]);
+        select_clicked_row(&list, &rows[0], true);
+        assert_eq!(selected(), vec![1]);
+        select_clicked_row(&list, &rows[2], true);
+        assert_eq!(selected(), vec![1, 2]);
+        select_clicked_row(&list, &rows[1], false);
+        assert_eq!(selected(), vec![1]);
+        select_clicked_row(&list, &rows[2], false);
+        assert_eq!(selected(), vec![2]);
+        let fixture = std::env::temp_dir().join(format!("isoweaver-add-test-{}", std::process::id()));
+        std::fs::create_dir_all(fixture.join("folder/nested")).unwrap();
+        std::fs::write(fixture.join("folder/nested/hello.txt"), "hello").unwrap();
+        let preview = AddPreview {
+            all: Rc::new(RefCell::new(Vec::new())), visible: Rc::new(RefCell::new(Vec::new())),
+            dir: Rc::new(RefCell::new(String::new())), tree: ListBox::new(),
+            tree_paths: Rc::new(RefCell::new(Vec::new())), list: ListBox::new(),
+            breadcrumb: Label::new(None), search: gtk::SearchEntry::new(),
+        };
+        preview.search.set_text("hidden-by-filter");
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        stage_adds(&[(fixture.join("folder"), "/folder".into())], &pending,
+            &Label::new(None), &Label::new(None), &preview);
+        assert_eq!(pending.borrow().len(), 1);
+        assert_eq!(preview.visible.borrow()[0].path, "folder");
+        assert!(preview.tree_paths.borrow().contains(&"folder/nested".into()));
+        let added = preview.all.borrow().iter().find(|entry| entry.path.ends_with("hello.txt")).unwrap().clone();
+        assert_eq!(added.size, 5);
+        let output = fixture.join("output");
+        std::fs::create_dir(&output).unwrap();
+        extract_entries(Path::new("unused.iso"), &output, &[added]).unwrap();
+        assert_eq!(std::fs::read_to_string(output.join("folder/nested/hello.txt")).unwrap(), "hello");
+        std::fs::write(fixture.join("folder/nested/hello.txt"), "replacement").unwrap();
+        stage_adds(&[(fixture.join("folder"), "/folder".into())], &pending,
+            &Label::new(None), &Label::new(None), &preview);
+        assert_eq!(pending.borrow().len(), 1);
+        assert_eq!(preview.all.borrow().iter().filter(|entry| entry.path.ends_with("hello.txt")).count(), 1);
+        assert_eq!(preview.all.borrow().iter().find(|entry| entry.path.ends_with("hello.txt")).unwrap().size, 11);
+        std::fs::remove_dir_all(fixture).unwrap();
+        let app = Application::builder().application_id("org.isoweaver.SelectionTest").build();
+        app.register(None::<&gio::Cancellable>).unwrap();
+        let window = ApplicationWindow::builder().application(&app).build();
+        let completed = Rc::new(RefCell::new(false));
+        let result = completed.clone();
+        run_operation(&window, "Test operation", || {
+            std::thread::sleep(std::time::Duration::from_millis(160));
+            Ok(42)
+        }, move |value| { assert_eq!(value.unwrap(), 42); *result.borrow_mut() = true; });
+        let context = glib::MainContext::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !*completed.borrow() && std::time::Instant::now() < deadline {
+            context.iteration(false);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(*completed.borrow(), "Worker completion must reach the GTK loop");
+        window.destroy();
+        build_ui(&app);
+        let browser = app.active_window().unwrap();
+        fn find_status(widget: &gtk::Widget, footer: bool) -> Option<Label> {
+            if let Ok(label) = widget.clone().downcast::<Label>() {
+                if (!footer && widget.has_css_class("status-badge")) || (footer && label.text().starts_with("Ready · Open")) { return Some(label); }
+            }
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                if let Some(label) = find_status(&widget, footer) { return Some(label); }
+                child = widget.next_sibling();
+            }
+            None
+        }
+        for footer in [false, true] {
+        let badge = find_status(browser.upcast_ref(), footer).unwrap();
+        for scale in [1.0, 1.25, 1.5] {
+        let attributes = gtk::pango::AttrList::new();
+        attributes.insert(gtk::pango::AttrFloat::new_scale(scale));
+        badge.set_attributes(Some(&attributes));
+        badge.set_text(if footer { "125 entries · Select files to extract or edit" } else { "ISO image · Clean" });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+        while std::time::Instant::now() < deadline { context.iteration(false); }
+        let (ink, _) = badge.layout().pixel_extents();
+        let (_, offset) = badge.layout_offsets();
+        let offset = offset + i32::from(badge.style_context().padding().top());
+        assert!(offset + ink.y() >= 4, "Image status text has insufficient top clearance: {}", offset + ink.y());
+        assert!(offset + ink.y() + ink.height() <= badge.allocated_height() - 4, "Image status text clips at the bottom: ink_end={}, height={}, allocated={}", offset + ink.y() + ink.height(), badge.height(), badge.allocated_height());
+        }
+        }
+        browser.destroy();
+    }
+}
+
+fn dated_image_path(source: &Path) -> Result<PathBuf, String> {
+    let stamp = glib::DateTime::now_local().and_then(|date| date.format("%Y-%m-%d_%H-%M-%S"))
+        .map_err(|error| error.to_string())?;
+    let stem = source.file_stem().unwrap_or_default().to_string_lossy();
+    for counter in 0..10000 {
+        let extra = if counter == 0 { String::new() } else { format!("_{counter}") };
+        let target = source.with_file_name(format!("{stem}_edited_{stamp}{extra}.iso"));
+        if !target.exists() { return Ok(target); }
+    }
+    Err("Could not find an unused output filename.".into())
+}
+
+/// Poll a worker from the GTK loop; unknown subprocess durations use honest pulsing progress.
+fn run_operation<T: Send + 'static>(parent: &ApplicationWindow, title: &str,
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+    done: impl FnOnce(Result<T, String>) + 'static) {
+    let dialog = gtk::Window::builder().transient_for(parent).modal(true)
+        .title(title).resizable(false).default_width(380).build();
+    dialog.connect_close_request(|_| glib::Propagation::Stop);
+    let content = GtkBox::new(Orientation::Vertical, 16);
+    for set_margin in [GtkBox::set_margin_top, GtkBox::set_margin_bottom, GtkBox::set_margin_start, GtkBox::set_margin_end] {
+        set_margin(&content, 24);
+    }
+    content.append(&Label::new(Some(title)));
+    let progress = ProgressBar::new();
+    progress.pulse();
+    content.append(&progress);
+    dialog.set_child(Some(&content));
+    dialog.present();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || { let _ = sender.send(work()); });
+    let mut done = Some(done);
+    glib::timeout_add_local(std::time::Duration::from_millis(80), move || {
+        progress.pulse();
+        let result = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return glib::ControlFlow::Continue,
+            Err(_) => Err("The operation stopped unexpectedly.".into()),
+        };
+        dialog.destroy();
+        if let Some(done) = done.take() { done(result); }
+        glib::ControlFlow::Break
+    });
 }

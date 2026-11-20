@@ -1,11 +1,18 @@
 # Changelog
 
-## 0.1.0 - Initial release candidate
+## Unreleased
 
-- Added a native GTK 4 window, image browser, entry sizes, and extraction actions.
-- Added path checks and streaming extraction through 7-Zip.
-- Documented build requirements and current limitations.
-- Added xorriso boot/system-area inspection and transactional ISO editing with staged add, delete, rename, create-directory, Save, and Save As actions.
-- Reworked the window into a menu/toolbar, image state banner, directory-tree/file-table split view, search field, and operation/status footer.
-- Replaced the single hamburger with a compact panel of Edit, View, Tools, and Help dropdowns; kept frequent operations on the toolbar and consolidated image metadata into one **Tools → Image Information** command.
-- Grouped toolbar actions with separators and added color-tinted, labeled icons with tooltips.
+- Fixed plain-click and Ctrl-click selection.
+- Show staged host additions and nested folders immediately, including replacements and extraction of staged files.
+- Replaced Save and Save As with one action that writes a dated copy and preserves existing files.
+- Moved image operations to background workers with pulsing progress indicators.
+- Structured image information into volume, dates, and boot sections.
+- Simplified About to a single view with a GPL link.
+- Redrew the application icon and fixed embedded, installed, and window icon resolution.
+- Refined GTK styling and native menus; fixed menu bottom spacing and status-text clipping.
+- Added metadata, real ISO save, and GTK regression checks.
+
+## 0.1.0 — Initial release candidate
+
+- Added ISO browsing, extraction, staged editing, xorriso inspection and rebuild validation.
+- Added Linux desktop integration and local AppImage packaging scripts.

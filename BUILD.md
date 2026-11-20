@@ -3,7 +3,7 @@
 ## Requirements
 
 - Stable Rust and Cargo
-- GTK 4 development package and `pkg-config`
+- GTK 4 development package, GLib development tools (`glib-compile-resources`), and `pkg-config`
 - `7z` executable
 - `xorriso` executable
 
@@ -14,7 +14,7 @@ Install distribution packages listed in [README.md](README.md). The Cargo lockfi
 ```sh
 cargo check --locked
 cargo build --release --locked
-cargo run --release
+cargo run --release --locked
 ```
 
 The release binary is `target/release/isoweaver`. For a local desktop installation, run `packaging/linux/install.sh` after building. To install to a system prefix, run the script with a prefix such as `/usr/local`.
@@ -31,4 +31,4 @@ An x86_64 Linux AppImage is built as a single downloadable file that bundles the
 LINUXDEPLOY=/path/to/linuxdeploy packaging/linux/build-appimage.sh
 ```
 
-The result is written to `dist/`. The GitHub Actions workflow builds the AppImage and publishes it as a workflow artifact. The package still uses the host Linux kernel, graphics driver, and display server.
+The result is written to `dist/`. No GitHub Actions workflow is included in this checkout. Build and validate the AppImage locally before distributing it. The package still uses the host Linux kernel, graphics driver, and display server.

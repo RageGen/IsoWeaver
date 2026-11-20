@@ -81,7 +81,13 @@ pub fn save_image(input: &Path, target: &Path, changes: &[Change], allow_replace
             return Err("The source image had system-area boot data, but the rebuilt image does not. The original was preserved.".into());
         }
     }
-    std::fs::rename(&temp, target).map_err(|e| {
+    let commit = if allow_replace {
+        std::fs::rename(&temp, target)
+    } else {
+        // Linking within the same directory atomically refuses an existing destination.
+        std::fs::hard_link(&temp, target).map(|()| { let _ = std::fs::remove_file(&temp); })
+    };
+    commit.map_err(|e| {
         let _ = std::fs::remove_file(&temp);
         format!("Could not commit verified image to {}: {e}", target.display())
     })?;
@@ -104,4 +110,102 @@ fn temporary_sibling(target: &Path) -> Result<PathBuf, String> {
         if !candidate.exists() { return Ok(candidate); }
     }
     Err("Could not allocate a temporary output name.".into())
+}
+
+/// Extract known metadata fields while keeping diagnostic chatter out of the summary.
+pub fn information_sections(report: &str) -> Vec<(String, Vec<(String, String)>)> {
+    let mut volume = Vec::new();
+    let mut dates = Vec::new();
+    let mut boot = Vec::new();
+    for line in report.lines() {
+        let Some((key, value)) = line.split_once(':') else { continue };
+        let key = key.trim();
+        let value = value.trim();
+        let label = match key {
+            "Volume Id" => "Volume label",
+            "Volume Set Id" => "Volume set",
+            "Publisher Id" => "Publisher",
+            "Preparer Id" => "Prepared by",
+            "App Id" => "Application",
+            "System Id" => "System",
+            "CopyrightFile" => "Copyright file",
+            "Abstract File" => "Abstract file",
+            "Biblio File" => "Bibliography file",
+            "Creation Time" | "Modif. Time" | "Expir. Time" | "Eff. Time" => {
+                let label = match key {
+                    "Creation Time" => "Created", "Modif. Time" => "Modified",
+                    "Expir. Time" => "Expires", _ => "Effective from",
+                };
+                dates.push((label.into(), format_iso_date(value)));
+                continue;
+            }
+            _ if key.starts_with("El Torito") || key.starts_with("System area") || key.starts_with("System Area") || key.starts_with("MBR") || key.starts_with("GPT") || key.starts_with("APM") => {
+                boot.push((key.into(), value.into()));
+                continue;
+            }
+            _ => continue,
+        };
+        volume.push((label.into(), if value.is_empty() { "Not specified".into() } else { value.into() }));
+    }
+    if boot.is_empty() {
+        boot.push(("Boot metadata".into(), if report.contains("No El Torito information") && report.contains("No System Area") {
+            "No El Torito or system-area boot metadata detected"
+        } else { "See the full report for available boot metadata" }.into()));
+    }
+    vec![("Volume".into(), volume), ("Dates".into(), dates), ("Boot information".into(), boot)]
+}
+
+fn format_iso_date(value: &str) -> String {
+    if value.is_empty() || value.bytes().all(|byte| byte == b'0') { return "Not specified".into(); }
+    if value.len() >= 14 && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return format!("{}-{}-{} {}:{}:{}", &value[..4], &value[4..6], &value[6..8], &value[8..10], &value[10..12], &value[12..14]);
+    }
+    value.into()
+}
+
+#[cfg(test)]
+mod information_tests {
+    use super::*;
+    #[test]
+    fn metadata_is_grouped_and_dates_are_readable() {
+        let sections = information_sections("xorriso : NOTE : chatter\nVolume Id : EXAMPLE\nPublisher Id : \nCreation Time: 2026112015302400\nExpir. Time: 0000000000000000\nEl Torito boot img : 1 BIOS\nGPT disk GUID : abc");
+        assert_eq!(sections[0].1, vec![("Volume label".into(), "EXAMPLE".into()), ("Publisher".into(), "Not specified".into())]);
+        assert_eq!(sections[1].1[0].1, "2026-11-20 15:30:24");
+        assert_eq!(sections[1].1[1].1, "Not specified");
+        assert_eq!(sections[2].1.len(), 2);
+    }
+    #[test]
+    fn missing_boot_data_is_explicit() {
+        let sections = information_sections("xorriso : NOTE : No El Torito information was loaded\nxorriso : NOTE : No System Area was loaded");
+        assert!(sections[2].1[0].1.starts_with("No El Torito"));
+        assert_eq!(format_iso_date("unknown"), "unknown");
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+    #[test]
+    fn saves_a_copy_and_preserves_source_and_existing_target() {
+        let root = std::env::temp_dir().join(format!("isoweaver-save-test-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("files")).unwrap();
+        std::fs::write(root.join("files/original.txt"), "original").unwrap();
+        let input = root.join("source.iso");
+        let result = std::process::Command::new("xorriso").args(["-as", "mkisofs", "-o"])
+            .arg(&input).arg(root.join("files")).output().unwrap();
+        assert!(result.status.success());
+        let original = std::fs::read(&input).unwrap();
+        let target = root.join("source_edited.iso");
+        let changes = vec![Change::CreateDirectory { image_path: "/new-folder".into() }];
+        save_image(&input, &target, &changes, false).unwrap();
+        assert_eq!(std::fs::read(&input).unwrap(), original);
+        let saved = std::fs::read(&target).unwrap();
+        assert!(save_image(&input, &target, &changes, false).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), saved);
+        let listing = std::process::Command::new("xorriso").arg("-indev").arg(&target)
+            .args(["-ls", "/", "--", "-end"]).output().unwrap();
+        assert!(listing.status.success());
+        assert!(String::from_utf8_lossy(&listing.stdout).contains("new-folder"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

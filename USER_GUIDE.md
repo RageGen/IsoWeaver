@@ -5,17 +5,17 @@
 1. Launch IsoWeaver and choose **Open**.
 2. Select an ISO image. The left pane shows folders; the right pane lists the active folder's entries.
 3. Double-click a folder to open it. Use the search box to filter the active folder.
-4. Open **Tools → Image Information** for the volume descriptor, El Torito report, and system-area report from xorriso.
+4. Open **Tools → Image Information** for grouped volume details, dates, and boot information. Expand **Full xorriso report** for diagnostics.
 
 ## Edit an image
 
 - **Add Files** and **Add Folder** add host content under the current image folder.
-- **Delete Selected** removes selected entries after confirmation.
-- **Edit → Rename Selected** renames a selected entry.
-- **Edit → New Folder in Image** creates a directory in the active image folder.
-- **Save** rebuilds the current image. **Save As** writes a new copy. The output is written to a temporary file and reopened before it replaces a destination.
+- **Delete Selected** stages removal of selected entries after confirmation.
+- **Edit → Rename Selected** stages a rename of one selected entry.
+- **Edit → New Folder in Image** stages a directory in the active image folder.
+- **Save** writes a copy beside the source named `name_edited_YYYY-MM-DD_HH-MM-SS.iso`. The timestamp uses local time. Existing names receive a numeric suffix; the source directory must be writable. The source is preserved; the output is validated before it is committed.
 
-Image changes remain staged until saved. Opening another image or quitting with pending changes asks before discarding them.
+Added files and nested folders appear immediately as **Added (unsaved)**. Delete, rename, and new-folder changes become visible after saving. Image changes remain staged until saved. Opening another image or quitting with pending changes asks before discarding them.
 
 ## Extract content
 

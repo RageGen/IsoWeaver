@@ -1,0 +1,6 @@
+<gresources>
+  <gresource prefix="/org/isoweaver/IsoWeaver">
+    <file>icons/scalable/apps/org.isoweaver.IsoWeaver.svg</file>
+    <file>icons/256x256/apps/org.isoweaver.IsoWeaver.png</file>
+  </gresource>
+</gresources>

@@ -1,16 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>IsoWeaver</title>
+  <desc>A blue optical disc with a silver hub, on a transparent background.</desc>
   <defs>
-    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#263b68"/><stop offset="1" stop-color="#171c35"/>
-    </linearGradient>
-    <linearGradient id="disc" x1=".12" y1=".1" x2=".9" y2=".9">
-      <stop stop-color="#72e4db"/><stop offset="1" stop-color="#6c8cff"/>
+    <linearGradient id="face" x1="16" y1="12" x2="112" y2="108" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#99c1f1"/>
+      <stop offset=".5" stop-color="#62a0ea"/>
+      <stop offset="1" stop-color="#3584e4"/>
     </linearGradient>
   </defs>
-  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#tile)"/>
-  <circle cx="256" cy="216" r="128" fill="url(#disc)"/>
-  <circle cx="256" cy="216" r="96" fill="none" stroke="#eafcff" stroke-opacity=".62" stroke-width="5"/>
-  <circle cx="256" cy="216" r="27" fill="#253960" stroke="#f5fcff" stroke-width="8"/>
-  <path d="M96 370c64 0 64 40 160 40s96-40 160-40" fill="none" stroke="#72e4db" stroke-width="19" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M96 416c64 0 64 40 160 40s96-40 160-40" fill="none" stroke="#8a9eff" stroke-width="19" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- A shallow lower edge gives the object the familiar GNOME icon silhouette. -->
+  <path fill="#1c71d8" fill-rule="evenodd" d="M64 16a48 48 0 1 1 0 96 48 48 0 0 1 0-96Zm0 38a10 10 0 1 0 0 20 10 10 0 0 0 0-20Z"/>
+  <path fill="url(#face)" fill-rule="evenodd" d="M64 12a48 48 0 1 1 0 96 48 48 0 0 1 0-96Zm0 38a10 10 0 1 0 0 20 10 10 0 0 0 0-20Z"/>
+  <!-- Broad, quiet reflections remain readable at launcher sizes. -->
+  <path fill="#fff" opacity=".22" d="M30.1 26.1 53 49a16 16 0 0 1 11-5V12a47.8 47.8 0 0 0-33.9 14.1Z"/>
+  <path fill="#fff" opacity=".12" d="M97.9 93.9 75 71a16 16 0 0 1-11 5v32a47.8 47.8 0 0 0 33.9-14.1Z"/>
+  <circle cx="64" cy="60" r="35" fill="none" stroke="#fff" stroke-opacity=".22" stroke-width="2"/>
+  <path fill="#d5d9de" fill-rule="evenodd" d="M64 44a16 16 0 1 1 0 32 16 16 0 0 1 0-32Zm0 8a8 8 0 1 0 0 16 8 8 0 0 0 0-16Z"/>
+  <path fill="#f6f5f4" fill-rule="evenodd" d="M64 43a16 16 0 1 1 0 32 16 16 0 0 1 0-32Zm0 9a7 7 0 1 0 0 14 7 7 0 0 0 0-14Z"/>
+  <circle cx="64" cy="59" r="8" fill="none" stroke="#9a9996" stroke-width="2"/>
 </svg>

@@ -18,3 +18,10 @@ install -Dm644 "$project_dir/data/icons/256x256/apps/org.isoweaver.IsoWeaver.png
     "$install_prefix/share/icons/hicolor/256x256/apps/org.isoweaver.IsoWeaver.png"
 
 printf 'Installed IsoWeaver under %s\n' "$install_prefix"
+
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f -t "$install_prefix/share/icons/hicolor"
+fi
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$install_prefix/share/applications"
+fi
