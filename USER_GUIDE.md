@@ -9,7 +9,7 @@
 
 ## Edit an image
 
-- **Add Files** and **Add Folder** add host content under the current image folder.
+- **Add Files or Folders** opens a single browser for files and directories. Click to select one item, Ctrl-click for several, and double-click a folder to browse it. Use the location field or parent-folder button to navigate, then choose **Add Selected**. Files and folders are detected automatically and added under the current image folder.
 - **Delete Selected** stages removal of selected entries after confirmation.
 - **Edit → Rename Selected** stages a rename of one selected entry.
 - **Edit → New Folder in Image** stages a directory in the active image folder.

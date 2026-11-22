@@ -116,8 +116,7 @@ fn build_ui(app: &Application) {
 
     let open = action_button("Open", "document-open-symbolic", "action-open", "Open an ISO image");
     let save = action_button("Save", "document-save-symbolic", "action-save", "Save a dated edited copy beside the source image");
-    let add_files = action_button("Add Files", "list-add-symbolic", "action-add", "Add host files to the current image folder");
-    let add_directory = action_button("Add Folder", "folder-new-symbolic", "action-add", "Add a host folder to the image");
+    let add_files = action_button("Add Files or Folders", "list-add-symbolic", "action-add", "Add files and folders to the current image folder");
     let extract = action_button("Extract Selected", "go-up-symbolic", "action-extract", "Extract selected entries to your computer");
     let extract_all = action_button("Extract All", "go-up-symbolic", "action-extract", "Extract every entry to your computer");
     let delete = action_button("Delete Selected", "edit-delete-symbolic", "action-delete", "Delete selected entries from the image");
@@ -152,7 +151,7 @@ fn build_ui(app: &Application) {
     toolbar.add_css_class("toolbar-row");
     for button in [&open, &save] { toolbar.append(button); }
     toolbar.append(&gtk::Separator::new(Orientation::Vertical));
-    for button in [&add_files, &add_directory] { toolbar.append(button); }
+    toolbar.append(&add_files);
     toolbar.append(&gtk::Separator::new(Orientation::Vertical));
     for button in [&extract, &extract_all] { toolbar.append(button); }
     toolbar.append(&gtk::Separator::new(Orientation::Vertical));
@@ -509,42 +508,6 @@ fn build_ui(app: &Application) {
                 let status = status.clone();
                 let image_state = image_state.clone();
                 confirm(&parent_for_callback, "Replace image entries?", "Some selected names already exist in this folder. They will be replaced when saved.", move |yes| {
-                    if yes { stage_adds(&candidates, &pending, &status, &image_state, &preview); }
-                });
-            } else {
-                stage_adds(&candidates, &pending, &status, &image_state, &preview);
-            }
-        });
-    });
-
-    let parent = window_state.clone();
-    let current = current_state.clone();
-    let all = all_entries.clone();
-    let dir = current_dir.clone();
-    let pending = changes.clone();
-    let status_add_dir = status.clone();
-    let state_add_dir = image_state_label.clone();
-    add_directory.connect_clicked(move |_| {
-        let preview = preview.clone();
-        if current.borrow().is_none() { return; }
-        let parent = parent.clone();
-        let dir = dir.borrow().clone();
-        let all = all.clone();
-        let pending = pending.clone();
-        let status = status_add_dir.clone();
-        let image_state = state_add_dir.clone();
-        let parent_for_callback = parent.clone();
-        choose_one(&parent, FileChooserAction::SelectFolder, "Choose a directory to add", move |source| {
-            let Some(source) = source else { return };
-            let candidates = map_sources(vec![source], &dir, &status);
-            let collision = candidates.iter().any(|(_, target)| {
-                all.borrow().iter().any(|entry| format!("/{}", entry.path) == *target)
-            });
-            if collision {
-                let pending = pending.clone();
-                let status = status.clone();
-                let image_state = image_state.clone();
-                confirm(&parent_for_callback, "Replace image directory?", "This directory already exists in the image and will be replaced when saved.", move |yes| {
                     if yes { stage_adds(&candidates, &pending, &status, &image_state, &preview); }
                 });
             } else {
@@ -958,6 +921,7 @@ fn merge_added_entries(all: &mut Vec<Entry>, additions: Vec<Entry>) {
 }
 
 fn stage_adds(candidates: &[(PathBuf, String)], pending: &Rc<RefCell<Vec<Change>>>, status: &Label, image_state: &Label, preview: &AddPreview) {
+    if candidates.is_empty() { return; }
     let additions = match candidates.iter().try_fold(Vec::new(), |mut entries, (source, path)| {
         entries.extend(collect_added_entries(source, path)?);
         Ok::<_, String>(entries)
@@ -1079,19 +1043,115 @@ fn choose_one(parent: &ApplicationWindow, action: FileChooserAction, title: &str
     chooser.show();
 }
 
+fn populate_add_folder(list: &ListBox, location: &gtk::Entry, paths: &Rc<RefCell<Vec<PathBuf>>>, directory: &Path) -> Result<(), String> {
+    let directory = directory.canonicalize().map_err(|error| error.to_string())?;
+    let mut entries = std::fs::read_dir(&directory).map_err(|error| error.to_string())?
+        .map(|entry| entry.map(|entry| entry.path())).collect::<Result<Vec<_>, _>>().map_err(|error| error.to_string())?;
+    entries.sort_by_key(|path| (!path.is_dir(), path.file_name().unwrap_or_default().to_ascii_lowercase()));
+    clear_list(list);
+    for path in &entries {
+        let row = ListBoxRow::new();
+        let content = GtkBox::new(Orientation::Horizontal, 12);
+        content.set_margin_top(8);
+        content.set_margin_bottom(8);
+        content.set_margin_start(12);
+        content.set_margin_end(12);
+        content.append(&gtk::Image::from_icon_name(if path.is_dir() { "folder-symbolic" } else { "text-x-generic-symbolic" }));
+        let name = Label::new(Some(&path.file_name().unwrap_or_default().to_string_lossy()));
+        name.set_xalign(0.0);
+        name.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        name.set_hexpand(true);
+        content.append(&name);
+        row.set_child(Some(&content));
+        list.append(&row);
+    }
+    *paths.borrow_mut() = entries;
+    location.set_text(&directory.to_string_lossy());
+    Ok(())
+}
+
 fn file_dialog(parent: &ApplicationWindow, callback: impl FnOnce(Vec<PathBuf>) + 'static) {
-    let chooser = FileChooserNative::new(Some("Add files to image"), Some(parent), FileChooserAction::Open, Some("Add"), Some("Cancel"));
-    chooser.set_select_multiple(true);
-    let callback = RefCell::new(Some(callback));
-    chooser.connect_response(move |dialog, response| {
-        let paths = if response == gtk::ResponseType::Accept {
-            let files = dialog.files();
-            (0..files.n_items()).filter_map(|index| files.item(index).and_downcast::<gio::File>().and_then(|file| file.path())).collect()
-        } else { Vec::new() };
-        if let Some(callback) = callback.borrow_mut().take() { callback(paths); }
-        dialog.destroy();
+    // GTK's native chooser separates file and folder selection; this browser accepts both.
+    let dialog = gtk::Dialog::builder().title("Add Files or Folders").transient_for(parent)
+        .modal(true).resizable(false).default_width(640).default_height(480).build();
+    let cancel = dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    let add = dialog.add_button("Add Selected", gtk::ResponseType::Accept);
+    for button in [&cancel, &add] {
+        button.set_margin_start(8);
+        button.set_margin_end(8);
+        button.set_margin_top(8);
+        button.set_margin_bottom(12);
+    }
+    add.set_sensitive(false);
+    let content = GtkBox::new(Orientation::Vertical, 12);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+    let navigation = GtkBox::new(Orientation::Horizontal, 8);
+    let up = Button::from_icon_name("go-up-symbolic");
+    up.set_tooltip_text(Some("Parent folder"));
+    let location = gtk::Entry::new();
+    location.set_hexpand(true);
+    location.set_tooltip_text(Some("Folder location — press Enter to navigate"));
+    navigation.append(&up);
+    navigation.append(&location);
+    content.append(&navigation);
+    content.append(&Label::new(Some("Select files or folders. Ctrl-click to select several; double-click a folder to browse it.")));
+    let list = ListBox::new();
+    list.set_selection_mode(SelectionMode::Multiple);
+    content.append(&ScrolledWindow::builder().vexpand(true).child(&list).build());
+    let message = Label::new(None);
+    message.set_wrap(true);
+    content.append(&message);
+    dialog.content_area().append(&content);
+    let paths = Rc::new(RefCell::new(Vec::new()));
+    let list_state = list.clone();
+    let location_state = location.clone();
+    let paths_state = paths.clone();
+    let navigate: Rc<dyn Fn(&Path)> = Rc::new(move |path| {
+        match populate_add_folder(&list_state, &location_state, &paths_state, path) {
+            Ok(()) => message.set_text(""),
+            Err(error) => message.set_text(&format!("Could not open folder: {error}")),
+        }
     });
-    chooser.show();
+    navigate(&glib::home_dir());
+    let navigate_location = navigate.clone();
+    location.connect_activate(move |entry| navigate_location(Path::new(entry.text().as_str())));
+    let navigate_up = navigate.clone();
+    let up_location = location.clone();
+    up.connect_clicked(move |_| {
+        if let Some(parent) = Path::new(up_location.text().as_str()).parent() { navigate_up(parent); }
+    });
+    let navigation_paths = paths.clone();
+    list.connect_row_activated(move |_, row| {
+        let path = navigation_paths.borrow().get(row.index() as usize).cloned();
+        if let Some(path) = path.filter(|path| path.is_dir()) { navigate(&path); }
+    });
+    let click = gtk::GestureClick::new();
+    click.set_button(1);
+    click.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let selection_list = list.clone();
+    click.connect_pressed(move |gesture, presses, _, y| {
+        if let Some(row) = selection_list.row_at_y(y.floor() as i32) {
+            let control = gesture.current_event_state().contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            select_clicked_row(&selection_list, &row, control);
+            row.grab_focus();
+            let _ = gesture.set_state(gtk::EventSequenceState::Claimed);
+            if presses == 2 && !control { row.emit_activate(); }
+        }
+    });
+    list.add_controller(click);
+    list.connect_selected_rows_changed(move |list| add.set_sensitive(!list.selected_rows().is_empty()));
+    let callback = RefCell::new(Some(callback));
+    dialog.connect_response(move |dialog, response| {
+        let selected = if response == gtk::ResponseType::Accept {
+            list.selected_rows().iter().filter_map(|row| paths.borrow().get(row.index() as usize).cloned()).collect()
+        } else { Vec::new() };
+        if let Some(callback) = callback.borrow_mut().take() { callback(selected); }
+        dialog.close();
+    });
+    dialog.present();
 }
 
 fn confirm(parent: &ApplicationWindow, title: &str, message: &str, callback: impl FnOnce(bool) + 'static) {
@@ -1374,6 +1434,27 @@ mod selection_tests {
         };
         preview.search.set_text("hidden-by-filter");
         let pending = Rc::new(RefCell::new(Vec::new()));
+        std::fs::write(fixture.join("single.txt"), "single").unwrap();
+        let host_list = ListBox::new();
+        host_list.set_selection_mode(SelectionMode::Multiple);
+        let host_location = gtk::Entry::new();
+        let host_paths = Rc::new(RefCell::new(Vec::new()));
+        populate_add_folder(&host_list, &host_location, &host_paths, &fixture).unwrap();
+        assert_eq!(host_paths.borrow().len(), 2);
+        host_list.select_all();
+        let selected = host_list.selected_rows().iter().map(|row| host_paths.borrow()[row.index() as usize].clone()).collect();
+        let mapped = map_sources(selected, "", &Label::new(None));
+        let mixed_pending = Rc::new(RefCell::new(Vec::new()));
+        stage_adds(&[], &mixed_pending, &Label::new(None), &Label::new(None), &preview);
+        assert!(mixed_pending.borrow().is_empty());
+        stage_adds(&mapped, &mixed_pending, &Label::new(None), &Label::new(None), &preview);
+        assert_eq!(mixed_pending.borrow().len(), 2);
+        assert!(preview.all.borrow().iter().any(|entry| entry.path == "folder" && entry.directory));
+        assert!(preview.all.borrow().iter().any(|entry| entry.path == "single.txt" && !entry.directory && entry.size == 6));
+        let before = host_paths.borrow().clone();
+        assert!(populate_add_folder(&host_list, &host_location, &host_paths, &fixture.join("missing")).is_err());
+        assert_eq!(*host_paths.borrow(), before);
+
         stage_adds(&[(fixture.join("folder"), "/folder".into())], &pending,
             &Label::new(None), &Label::new(None), &preview);
         assert_eq!(pending.borrow().len(), 1);
@@ -1408,9 +1489,27 @@ mod selection_tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(*completed.borrow(), "Worker completion must reach the GTK loop");
+        file_dialog(&window, |_| {});
+        let chooser = gtk::Window::list_toplevels().into_iter()
+            .filter_map(|widget| widget.downcast::<gtk::Window>().ok())
+            .find(|window| window.title().as_deref() == Some("Add Files or Folders")).unwrap();
+        assert!(!chooser.is_resizable(), "Add browser must not be resizable");
+        chooser.destroy();
         window.destroy();
         build_ui(&app);
         let browser = app.active_window().unwrap();
+        fn has_unified_add(widget: &gtk::Widget) -> bool {
+            if let Ok(label) = widget.clone().downcast::<Label>() {
+                if label.text() == "Add Files or Folders" { return true; }
+            }
+            let mut child = widget.first_child();
+            while let Some(widget) = child {
+                if has_unified_add(&widget) { return true; }
+                child = widget.next_sibling();
+            }
+            false
+        }
+        assert!(has_unified_add(browser.upcast_ref()), "One unified file/folder action is required");
         fn find_status(widget: &gtk::Widget, footer: bool) -> Option<Label> {
             if let Ok(label) = widget.clone().downcast::<Label>() {
                 if (!footer && widget.has_css_class("status-badge")) || (footer && label.text().starts_with("Ready · Open")) { return Some(label); }
